@@ -2,34 +2,18 @@
 
 A command-line client to listen to [RuuviTag](https://ruuvi.com) sensor measurements over Bluetooth LE and output as [InfluxDB line protocol](https://docs.influxdata.com/influxdb/v1.7/write_protocols/line_protocol_reference/).
 
-The output can be used in e.g. [Telegraf Execd Input](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/execd). For an example setup, check out [examples/telegraf](./examples/telegraf/README.md).
+## Fork info
+Note that this fork contains some (breaking) modifications from the original to fit more to my needs. Use with your own risk.
+
+It might be important to notice that this fork also tries to insert the lines into InfluxDB by default which might not be desirable for you.
 
 ## Requirements
 
-* RuuviTag Bluetooth sensor
+* RuuviTag Bluetooth sensor or Ruuvi Air Indoor Air Quality Monitor
 * Linux with BlueZ Bluetooth stack
 
-## Installation
-
-Download binary from [releases](https://github.com/lautis/ruuvitag-listener/releases) to your $PATH. Then, set file capabilities to allow access to Bluetooth with
-
-```sh
-sudo setcap 'cap_net_raw,cap_net_admin+eip' `which ruuvitag-listener`
-```
-
-Alternatively, install ruuvitag-listener using any of the following package managers:
-
-| Distribution  | Repository  | Instructions                                                             |
-| ------------- | ----------- | ------------------------------------------------------------------------ |
-| *Any*         | [Crates.io] | `cargo install ruuvitag-listener --locked` (note: does not run `setcap`) |
-| Arch Linux    | [AUR]       | `yay -S ruuvitag-listener` or `yay -S ruuvitag-listener-bin`             |
-
-
-[AUR]: https://aur.archlinux.org/packages/ruuvitag-listener
-[Crates.io]: https://crates.io/crates/ruuvitag-listener
-
 ## Usage
-
+**Before running the program see the [Fork info](#fork-info) section.**
 ```sh
 ruuvitag-listener
 ```

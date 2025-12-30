@@ -1,3 +1,4 @@
+use reqwest::{Client, StatusCode};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -52,7 +53,16 @@ fn fmt_fields(data_point: &DataPoint, fmt: &mut fmt::Formatter) -> fmt::Result {
             } else {
                 write!(fmt, ",")?;
             }
-            write!(fmt, "{}={}", key, value)?;
+            // Add matching for Integer values so that the value is suffixed with 'i'
+            // See https://docs.influxdata.com/influxdb/v1/write_protocols/line_protocol_reference/#data-types
+            match value {
+                FieldValue::IntegerValue(_) => {
+                    write!(fmt, "{}={}i", key, value)?;
+                }
+                _ => {
+                    write!(fmt, "{}={}", key, value)?;
+                }
+            }
         }
         Ok(())
     }
@@ -87,6 +97,38 @@ impl fmt::Display for DataPoint {
     }
 }
 
+// Notice that this method writes the line into InfluxDB if it is set by default settings!
+pub async fn write_line_to_influx(client: &Client, line: String) {
+    let response = client
+        .post("http://localhost:8086/write?db=ruuvi")
+        .body(line)
+        .send()
+        .await;
+    match response {
+        Ok(r) => {
+            println!(
+                "Status: {}\n\
+                 Message: {}\n
+                 \
+                 ",
+                r.status(),
+                r.text().await.unwrap()
+            );
+        }
+        Err(e) => {
+            println!("Error while inserting the data into influx!");
+            println!(
+                "Status: {}\n\
+                 Message: {}\n
+                 \
+                 ",
+                e.status().unwrap_or(StatusCode::IM_A_TEAPOT),
+                e.to_string()
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,8 +139,12 @@ mod tests {
         tags.insert("name".to_string(), "test".to_string());
         tags.insert("test".to_string(), "true".to_string());
         let mut fields = BTreeMap::new();
-        fields.insert("temperature".to_string(), FieldValue::IntegerValue(32));
+        fields.insert("temperature".to_string(), FieldValue::FloatValue(32.0));
         fields.insert("humidity".to_string(), FieldValue::FloatValue(0.2));
+        fields.insert(
+            "measurementSequenceNumber".to_string(),
+            FieldValue::IntegerValue(123),
+        );
         let time = SystemTime::now();
 
         let data_point = DataPoint {
@@ -112,7 +158,7 @@ mod tests {
         assert_eq!(
             result,
             format!(
-                "test,name=test,test=true humidity=0.2,temperature=32 {}",
+                "test,name=test,test=true humidity=0.2,measurementSequenceNumber=123i,temperature=32 {}",
                 duration_as_nanos(time.duration_since(SystemTime::UNIX_EPOCH).unwrap())
             )
         );

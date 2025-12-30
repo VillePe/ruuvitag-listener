@@ -1,105 +1,112 @@
-use btleplug::api::{BDAddr, Central, CentralEvent, Peripheral};
-use btleplug::bluez::adapter::ConnectedAdapter;
-use btleplug::bluez::manager::Manager;
+use btleplug::api::{BDAddr, Central, CentralEvent, Manager as _, Peripheral, ScanFilter};
+use btleplug::platform::{Adapter, PeripheralId};
 use ruuvi_sensor_protocol::{ParseError, SensorValues};
-use std::eprintln;
-use std::sync::Arc;
-use std::time::Duration;
+use btleplug::api;
+use futures::stream::StreamExt;
 
 // Measurement from RuuviTag sensor
 #[derive(Debug)]
 pub struct Measurement {
     pub address: BDAddr,
+    pub tx_power: Option<i16>,
+    pub rssi: Option<i16>,
     pub sensor_values: SensorValues,
 }
-
+const MANUFACTURER_DATA_ID: u16 = 0x0499;
 trait ToSensorValue {
-    fn to_sensor_value(self) -> Result<SensorValues, ParseError>;
+    async fn to_sensor_value(self) -> Result<SensorValues, ParseError>;
 }
 
-impl<T: Peripheral> ToSensorValue for T {
-    fn to_sensor_value(self) -> Result<SensorValues, ParseError> {
-        match self.properties().manufacturer_data {
-            Some(data) => from_manufacturer_data(&data),
-            None => Err(ParseError::EmptyValue),
+impl<T: api::Peripheral> ToSensorValue for T {
+    async fn to_sensor_value(self) -> Result<SensorValues, ParseError> {
+        match self.properties().await {
+            Ok(prop) => {match prop {
+                Some(data) => {
+                    if data.manufacturer_data.contains_key(&MANUFACTURER_DATA_ID) {
+                        from_manufacturer_data(&data.manufacturer_data[&MANUFACTURER_DATA_ID])
+                    } else {
+                        Err(ParseError::UnknownManufacturerId(0))
+                    }
+                }
+                None => {Err(ParseError::EmptyValue)}
+            }},
+            Err(_) => {Err(ParseError::EmptyValue)}
         }
     }
 }
 
 fn from_manufacturer_data(data: &[u8]) -> Result<SensorValues, ParseError> {
     if data.len() > 2 {
-        let id = u16::from(data[0]) + (u16::from(data[1]) << 8);
-        SensorValues::from_manufacturer_specific_data(id, &data[2..])
+        SensorValues::from_manufacturer_specific_data(&data)
     } else {
         Err(ParseError::EmptyValue)
     }
 }
 
-fn on_event_with_address(
-    central: &ConnectedAdapter,
-    address: BDAddr,
+async fn on_event_with_address(
+    central: &Adapter,
+    address: &PeripheralId,
 ) -> Option<Result<Measurement, ParseError>> {
-    match central.peripheral(address) {
-        Some(peripheral) => match peripheral.to_sensor_value() {
-            Ok(sensor_values) => Some(Ok(Measurement {
-                address,
-                sensor_values,
-            })),
-            Err(error) => Some(Err(error)),
-        },
-        None => {
-            eprintln!("Unknown device");
-            None
+    match central.peripheral(address).await {
+        Ok(peripheral) => {
+            let address = peripheral.address();
+            let properties = peripheral.properties().await.ok()??;
+            let rssi = properties.rssi;
+            let tx_power = properties.tx_power_level;
+
+            match peripheral.to_sensor_value().await {
+                Ok(sensor_values) => Some(Ok(Measurement {
+                    address,
+                    rssi,
+                    tx_power,
+                    sensor_values,
+                })),
+                Err(error) => Some(Err(error)),
+            }
         }
+        Err(_) => Some(Err(ParseError::EmptyValue))
     }
 }
 
-fn on_event(
-    central: &ConnectedAdapter,
+async fn on_event(
+    central: &Adapter,
     event: CentralEvent,
 ) -> Option<Result<Measurement, ParseError>> {
     match event {
-        CentralEvent::DeviceDiscovered(address) => on_event_with_address(central, address),
-        CentralEvent::DeviceLost(_) => None,
-        CentralEvent::DeviceUpdated(address) => on_event_with_address(central, address),
+        CentralEvent::DeviceDiscovered(address) => { on_event_with_address(central, &address).await },
+        CentralEvent::DeviceUpdated(address) => on_event_with_address(central, &address).await,
         CentralEvent::DeviceConnected(_) => None,
         CentralEvent::DeviceDisconnected(_) => None,
+        CentralEvent::ManufacturerDataAdvertisement { .. } => {None}
+        CentralEvent::ServiceDataAdvertisement { .. } => {None}
+        CentralEvent::ServicesAdvertisement { .. } => {None}
+        CentralEvent::StateUpdate(_) => {None}
     }
 }
 
 // Stream of RuuviTag measurements that gets passed to the given callback. Blocks and never stops.
-pub fn on_measurement(
+pub async fn on_measurement(
     f: Box<dyn Fn(Result<Measurement, ParseError>) + Send>,
 ) -> Result<(), btleplug::Error> {
-    let manager = Manager::new()?;
+    let manager : btleplug::platform::Manager = btleplug::platform::Manager::new().await?;
 
     // get bluetooth adapter
-    let adapters = manager.adapters()?;
+    let adapters = manager.adapters().await?;
 
-    let mut adapter = adapters
+    let adapter : Adapter = adapters
         .into_iter()
         .next()
         .expect("Bluetooth adapter not available");
 
-    // clear out any errant state
-    adapter = manager.down(&adapter)?;
-    adapter = manager.up(&adapter)?;
+    let mut events = adapter.events().await?;
 
-    // connect to the adapter
-    let central = Arc::new(adapter.connect()?);
-    central.active(false);
-    central.filter_duplicates(false);
+    adapter.start_scan(ScanFilter::default()).await?;
 
-    let closure_central = central.clone();
-    let event_receiver = central.event_receiver().unwrap();
-
-    loop {
-        central.start_scan().unwrap();
-        while let Ok(event) = event_receiver.recv_timeout(Duration::from_secs(60)) {
-            if let Some(result) = on_event(&closure_central, event) {
-                f(result)
-            }
+    while let Some(event) = events.next().await {
+        if let Some(result) = on_event(&adapter, event).await {
+            f(result)
         }
-        central.stop_scan()?;
     }
+
+    Err(btleplug::Error::NotSupported(String::from("No events received")))
 }
