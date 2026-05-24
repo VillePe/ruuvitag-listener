@@ -8,13 +8,18 @@ use crate::ruuvi_sensor_protocol::{
 };
 use clap::Parser;
 use std::collections::BTreeMap;
+use std::fmt::format;
 use std::io::Write;
 use std::panic::{self, PanicHookInfo};
 use std::time::SystemTime;
+use btleplug::Error;
+
 pub mod ruuvi;
 use ruuvi::{on_measurement, Measurement};
 
 pub mod influxdb;
+mod logging;
+
 use influxdb::{DataPoint, FieldValue};
 
 use crate::influxdb::write_line_to_influx;
@@ -129,7 +134,7 @@ fn field_set(measurement: &Measurement) -> BTreeMap<String, FieldValue> {
     );
     if measurement.sensor_values.tx_power_as_dbm().is_none() { // Added
         if measurement.tx_power.is_none() {
-            println!("No tx power found for mac {}", measurement.address);
+            logging::log_debug(format!("No tx power found for mac {}", measurement.address).as_str());
         }
         add_value_integer!(
             fields,
@@ -297,7 +302,7 @@ async fn print_result_async(
                 write_line_to_influx(client, datapoint.to_string()).await;
             }
             None => {
-                println!("No http client set!");
+                eprintln!("No http client set!");
                 ::std::process::exit(1);
             }
         }
@@ -306,7 +311,7 @@ async fn print_result_async(
 
 #[tokio::main]
 async fn listen(options: Options) -> Result<(), btleplug::Error> {
-    let verbose = options.verbose;
+    logging::log_debug("Starting to listen");
     on_measurement(Box::new(move |result| match result {
         Ok(measurement) => {
             let name = options.influxdb_measurement.clone();
@@ -318,9 +323,7 @@ async fn listen(options: Options) -> Result<(), btleplug::Error> {
             });
         }
         Err(error) => {
-            if verbose {
-                eprintln!("{}", error)
-            }
+            logging::log_debug(format!("{}", error).as_str());
         }
     })).await
 }
@@ -330,13 +333,26 @@ fn main() {
         eprintln!("Panic! {}", info);
         std::process::exit(0x2);
     }));
+    logging::log_info("RuuviTag Listener started");
     let options = Options::parse();
+    unsafe { logging::VERBOSE = options.verbose; }
+    logging::log_debug("Options parsed");
     match listen(options) {
         Ok(_) => std::process::exit(0x0),
         Err(why) => {
             match why {
-                PermissionDenied => println!("error: Permission Denied. Have you run setcap?"),
-                _ => eprintln!("error: {}", why),
+                PermissionDenied => eprintln!("error: Permission Denied. Have you run setcap?"),
+                Error::NotSupported(s) => eprintln!("[NotSupported] error: {}", s),
+                Error::DeviceNotFound => eprintln!("[DeviceNotFound] error: {}", why),
+                Error::Other(s) => eprintln!("[Other] error: {}", s),
+                Error::InvalidBDAddr(s) => eprintln!("[InvalidBDAddr] error: {}", s),
+                Error::NoSuchCharacteristic => eprintln!("[NoSuchCharacteristic] error: {}", why),
+                Error::NotConnected => eprintln!("[NotConnected] error: {}", why),
+                Error::RuntimeError(s) => eprintln!("[RuntimeError] error: {}", s),
+                Error::UnexpectedCallback => eprintln!("[UnexpectedCallback] error: {}", why),
+                Error::Uuid(s) => eprintln!("[Uuid] error: {}", s),
+                Error::TimedOut(duration) => eprintln!("[TimedOut] error: {}", why),
+                _ => eprintln!("[Generic] error: {}", why),
             }
             std::process::exit(0x1);
         }

@@ -3,6 +3,7 @@ use btleplug::platform::{Adapter, PeripheralId};
 use ruuvi_sensor_protocol::{ParseError, SensorValues};
 use btleplug::api;
 use futures::stream::StreamExt;
+use crate::logging;
 
 // Measurement from RuuviTag sensor
 #[derive(Debug)]
@@ -88,11 +89,14 @@ async fn on_event(
 pub async fn on_measurement(
     f: Box<dyn Fn(Result<Measurement, ParseError>) + Send>,
 ) -> Result<(), btleplug::Error> {
+    logging::log_debug("Initializing bluetooth manager...");
     let manager : btleplug::platform::Manager = btleplug::platform::Manager::new().await?;
 
+    logging::log_debug("Initializing bluetooth adapters...");
     // get bluetooth adapter
     let adapters = manager.adapters().await?;
 
+    logging::log_debug("Initializing the bluetooth adapter...");
     let adapter : Adapter = adapters
         .into_iter()
         .next()
@@ -100,8 +104,10 @@ pub async fn on_measurement(
 
     let mut events = adapter.events().await?;
 
+    logging::log_debug("Starting scanning...");
     adapter.start_scan(ScanFilter::default()).await?;
 
+    logging::log_debug("Scanning started. Waiting for events...");
     while let Some(event) = events.next().await {
         if let Some(result) = on_event(&adapter, event).await {
             f(result)

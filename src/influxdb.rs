@@ -1,3 +1,4 @@
+use crate::logging;
 use reqwest::{Client, StatusCode};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -106,24 +107,30 @@ pub async fn write_line_to_influx(client: &Client, line: String) {
         .await;
     match response {
         Ok(r) => {
-            println!(
-                "Status: {}\n\
+            logging::log_debug(
+                format!(
+                    "Status: {}\n\
                  Message: {}\n
                  \
                  ",
-                r.status(),
-                r.text().await.unwrap()
+                    r.status(),
+                    r.text().await.unwrap()
+                )
+                .as_str(),
             );
         }
         Err(e) => {
-            println!("Error while inserting the data into influx!");
-            println!(
-                "Status: {}\n\
+            logging::log_info("Error while inserting the data into influx!");
+            logging::log_info(
+                format!(
+                    "Status: {}\n\
                  Message: {}\n
                  \
                  ",
-                e.status().unwrap_or(StatusCode::IM_A_TEAPOT),
-                e.to_string()
+                    e.status().unwrap_or(StatusCode::IM_A_TEAPOT),
+                    e.to_string()
+                )
+                    .as_str(),
             );
         }
     }
