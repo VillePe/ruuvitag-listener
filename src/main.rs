@@ -292,7 +292,7 @@ async fn print_result_async(
         match writeln!(std::io::stdout(), "{datapoint}",) {
             Ok(_) => (),
             Err(error) => {
-                eprintln!("error: {}", error);
+                eprintln!("[Main] error: {}", error);
                 ::std::process::exit(1);
             }
         }
