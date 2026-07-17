@@ -99,9 +99,9 @@ impl fmt::Display for DataPoint {
 }
 
 // Notice that this method writes the line into InfluxDB if it is set by default settings!
-pub async fn write_line_to_influx(client: &Client, line: String) {
+pub async fn write_line_to_influx(client: &Client, line: String, db_address: &String) {
     let response = client
-        .post("http://localhost:8086/write?db=ruuvi")
+        .post(format!("http://{db_address}/write?db=ruuvi"))
         .body(line)
         .send()
         .await;

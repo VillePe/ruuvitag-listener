@@ -3,16 +3,15 @@ extern crate clap;
 extern crate ruuvi_sensor_protocol;
 
 use crate::ruuvi_sensor_protocol::{
-    Acceleration, BatteryPotential, Co2, Humidity, MeasurementSequenceNumber, MovementCounter,
-    Pm25, Pressure, Temperature, TransmitterPower, DataFormat, AirDensity,
+    Acceleration, AirDensity, BatteryPotential, Co2, DataFormat, Humidity,
+    MeasurementSequenceNumber, MovementCounter, Pm25, Pressure, Temperature, TransmitterPower,
 };
+use btleplug::Error;
 use clap::Parser;
 use std::collections::BTreeMap;
-use std::fmt::format;
 use std::io::Write;
 use std::panic::{self, PanicHookInfo};
 use std::time::SystemTime;
-use btleplug::Error;
 
 pub mod ruuvi;
 use ruuvi::{on_measurement, Measurement};
@@ -250,6 +249,39 @@ fn alias_map(aliases: &[Alias]) -> BTreeMap<String, String> {
     map
 }
 
+async fn print_result_async(
+    aliases: &BTreeMap<String, String>,
+    name: &str,
+    measurement: Measurement,
+    http_client: Option<&Client>,
+    options: &Options,
+) {
+    if options
+        .data_format_versions
+        .contains(&measurement.sensor_values.get_dataformat().unwrap())
+        || options.data_format_versions.is_empty()
+    {
+        let datapoint = to_data_point(&aliases, name.to_string(), &measurement, options);
+        match writeln!(std::io::stdout(), "{datapoint}",) {
+            Ok(_) => (),
+            Err(error) => {
+                eprintln!("[Main] error: {}", error);
+                ::std::process::exit(1);
+            }
+        }
+
+        match http_client {
+            Some(client) => {
+                write_line_to_influx(client, datapoint.to_string(), &options.influxdb_address).await;
+            }
+            None => {
+                eprintln!("No http client set!");
+                ::std::process::exit(1);
+            }
+        }
+    }
+}
+
 // Note! Some breaking changes done:
 // - default value for influxdb_measurement has been changed slightly
 // - added option to *keep* the colons in mac address. So by default the colons in mac address
@@ -274,39 +306,9 @@ struct Options {
     /// If empty, all versions are handled.
     #[clap(long = "ruuvi-data-format-versions", use_value_delimiter = true)]
     data_format_versions: Vec<u8>,
-}
-
-async fn print_result_async(
-    aliases: &BTreeMap<String, String>,
-    name: &str,
-    measurement: Measurement,
-    http_client: Option<&Client>,
-    options: &Options,
-) {
-    if options
-        .data_format_versions
-        .contains(&measurement.sensor_values.get_dataformat().unwrap())
-        || options.data_format_versions.is_empty()
-    {
-        let datapoint = to_data_point(&aliases, name.to_string(), &measurement, options);
-        match writeln!(std::io::stdout(), "{datapoint}",) {
-            Ok(_) => (),
-            Err(error) => {
-                eprintln!("[Main] error: {}", error);
-                ::std::process::exit(1);
-            }
-        }
-
-        match http_client {
-            Some(client) => {
-                write_line_to_influx(client, datapoint.to_string()).await;
-            }
-            None => {
-                eprintln!("No http client set!");
-                ::std::process::exit(1);
-            }
-        }
-    }
+    #[clap(long, default_value = "localhost:8086")]
+    /// The address of the influx database server.
+    influxdb_address: String,
 }
 
 #[tokio::main]
@@ -351,7 +353,7 @@ fn main() {
                 Error::RuntimeError(s) => eprintln!("[RuntimeError] error: {}", s),
                 Error::UnexpectedCallback => eprintln!("[UnexpectedCallback] error: {}", why),
                 Error::Uuid(s) => eprintln!("[Uuid] error: {}", s),
-                Error::TimedOut(duration) => eprintln!("[TimedOut] error: {}", why),
+                Error::TimedOut(duration) => eprintln!("[TimedOut] error: {}, duration {duration:?}", why),
                 _ => eprintln!("[Generic] error: {}", why),
             }
             std::process::exit(0x1);
