@@ -3,6 +3,7 @@ use reqwest::{Client, StatusCode};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, SystemTime};
+use tracing::{debug, info};
 
 /// Field values for InfluxDB line protocol
 #[derive(Debug)]
@@ -107,30 +108,24 @@ pub async fn write_line_to_influx(client: &Client, line: String, db_address: &St
         .await;
     match response {
         Ok(r) => {
-            logging::log_debug(
-                format!(
+            debug!(
                     "Status: {}\n\
                  Message: {}\n
                  \
                  ",
                     r.status(),
                     r.text().await.unwrap()
-                )
-                .as_str(),
             );
         }
         Err(e) => {
-            logging::log_info("Error while inserting the data into influx!");
-            logging::log_info(
-                format!(
+            info!("Error while inserting the data into influx!");
+            info!(
                     "Status: {}\n\
                  Message: {}\n
                  \
                  ",
                     e.status().unwrap_or(StatusCode::IM_A_TEAPOT),
                     e.to_string()
-                )
-                    .as_str(),
             );
         }
     }

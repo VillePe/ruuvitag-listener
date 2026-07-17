@@ -18,12 +18,15 @@ use ruuvi::{on_measurement, Measurement};
 
 pub mod influxdb;
 mod logging;
+mod win_service;
 
 use influxdb::{DataPoint, FieldValue};
 
 use crate::influxdb::write_line_to_influx;
 use btleplug::Error::PermissionDenied;
 use reqwest::Client;
+use tracing::{debug, error, info};
+use tracing::metadata::LevelFilter;
 
 fn tag_set(
     aliases: &BTreeMap<String, String>,
@@ -133,7 +136,7 @@ fn field_set(measurement: &Measurement) -> BTreeMap<String, FieldValue> {
     );
     if measurement.sensor_values.tx_power_as_dbm().is_none() { // Added
         if measurement.tx_power.is_none() {
-            logging::log_debug(format!("No tx power found for mac {}", measurement.address).as_str());
+            debug!("No tx power found for mac {}", measurement.address);
         }
         add_value_integer!(
             fields,
@@ -309,11 +312,14 @@ struct Options {
     #[clap(long, default_value = "localhost:8086")]
     /// The address of the influx database server.
     influxdb_address: String,
+    /// If set, the program will run as a Windows service.
+    #[clap(long)]
+    windows_service: bool,
 }
 
 #[tokio::main]
 async fn listen(options: Options) -> Result<(), btleplug::Error> {
-    logging::log_debug("Starting to listen");
+    info!("Starting to listen");
     on_measurement(Box::new(move |result| match result {
         Ok(measurement) => {
             let name = options.influxdb_measurement.clone();
@@ -325,7 +331,7 @@ async fn listen(options: Options) -> Result<(), btleplug::Error> {
             });
         }
         Err(error) => {
-            logging::log_debug(format!("{}", error).as_str());
+            error!("{}", error);
         }
     })).await
 }
@@ -335,10 +341,15 @@ fn main() {
         eprintln!("Panic! {}", info);
         std::process::exit(0x2);
     }));
-    logging::log_info("RuuviTag Listener started");
+    info!("RuuviTag Listener started");
     let options = Options::parse();
-    unsafe { logging::VERBOSE = options.verbose; }
-    logging::log_debug("Options parsed");
+    if options.windows_service {
+        logging::init_logger_service(if options.verbose {LevelFilter::DEBUG} else {LevelFilter::INFO});
+        win_service::start().unwrap();
+        return;
+    }
+    logging::init_logger(if options.verbose {LevelFilter::DEBUG} else {LevelFilter::INFO});
+    debug!("Options parsed");
     match listen(options) {
         Ok(_) => std::process::exit(0x0),
         Err(why) => {
