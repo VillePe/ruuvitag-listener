@@ -1,9 +1,8 @@
-use crate::logging;
 use reqwest::{Client, StatusCode};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, SystemTime};
-use tracing::{debug, info};
+use tracing::{info};
 
 /// Field values for InfluxDB line protocol
 #[derive(Debug)]
@@ -99,6 +98,8 @@ impl fmt::Display for DataPoint {
     }
 }
 
+
+static mut MESSAGE_COUNT: u32 = 0;
 // Notice that this method writes the line into InfluxDB if it is set by default settings!
 pub async fn write_line_to_influx(client: &Client, line: String, db_address: &String) {
     let response = client
@@ -108,22 +109,26 @@ pub async fn write_line_to_influx(client: &Client, line: String, db_address: &St
         .await;
     match response {
         Ok(r) => {
-            debug!(
+            if r.status() != StatusCode::NO_CONTENT {
+                info!(
                     "Status: {}\n\
-                 Message: {}\n
-                 \
-                 ",
+                 Message: {}\n",
                     r.status(),
                     r.text().await.unwrap()
             );
+            }
+            unsafe {
+                MESSAGE_COUNT += 1;
+                if MESSAGE_COUNT % 10 == 0 {
+                    info!("Wrote {} lines to InfluxDB", MESSAGE_COUNT);
+                }
+            }
         }
         Err(e) => {
             info!("Error while inserting the data into influx!");
             info!(
                     "Status: {}\n\
-                 Message: {}\n
-                 \
-                 ",
+                 Message: {}\n",
                     e.status().unwrap_or(StatusCode::IM_A_TEAPOT),
                     e.to_string()
             );

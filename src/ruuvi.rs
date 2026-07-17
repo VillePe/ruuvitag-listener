@@ -4,7 +4,6 @@ use ruuvi_sensor_protocol::{ParseError, SensorValues};
 use btleplug::api;
 use futures::stream::StreamExt;
 use tracing::info;
-use crate::logging;
 
 // Measurement from RuuviTag sensor
 #[derive(Debug)]

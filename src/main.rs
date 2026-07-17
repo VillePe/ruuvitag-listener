@@ -11,7 +11,7 @@ use clap::Parser;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::panic::{self, PanicHookInfo};
-use std::time::SystemTime;
+use std::time::{SystemTime};
 
 pub mod ruuvi;
 use ruuvi::{on_measurement, Measurement};
@@ -25,6 +25,7 @@ use influxdb::{DataPoint, FieldValue};
 use crate::influxdb::write_line_to_influx;
 use btleplug::Error::PermissionDenied;
 use reqwest::Client;
+use ruuvi_sensor_protocol::ParseError;
 use tracing::{debug, error, info};
 use tracing::metadata::LevelFilter;
 
@@ -268,7 +269,7 @@ async fn print_result_async(
         match writeln!(std::io::stdout(), "{datapoint}",) {
             Ok(_) => (),
             Err(error) => {
-                eprintln!("[Main] error: {}", error);
+                error!("[Main] error: {}", error);
                 ::std::process::exit(1);
             }
         }
@@ -282,6 +283,8 @@ async fn print_result_async(
                 ::std::process::exit(1);
             }
         }
+    } else {
+        error!("[Main] Skipping data format version {}", measurement.sensor_values.get_dataformat().unwrap());
     }
 }
 
@@ -317,7 +320,6 @@ struct Options {
     windows_service: bool,
 }
 
-#[tokio::main]
 async fn listen(options: Options) -> Result<(), btleplug::Error> {
     info!("Starting to listen");
     on_measurement(Box::new(move |result| match result {
@@ -331,43 +333,61 @@ async fn listen(options: Options) -> Result<(), btleplug::Error> {
             });
         }
         Err(error) => {
-            error!("{}", error);
+            match error {
+                ParseError::UnknownManufacturerId(_) => {}
+                ParseError::UnsupportedFormatVersion(_) => {error!("{}", error);}
+                ParseError::InvalidValueLength(_, _, _) => {error!("{}", error);}
+                ParseError::EmptyValue => {error!("{}", error);}
+                _ => {error!("{}", error);}
+            }
         }
     })).await
 }
 
 fn main() {
     panic::set_hook(Box::new(move |info: &PanicHookInfo| {
-        eprintln!("Panic! {}", info);
+        error!("Panic! {}", info);
         std::process::exit(0x2);
     }));
-    info!("RuuviTag Listener started");
     let options = Options::parse();
     if options.windows_service {
         logging::init_logger_service(if options.verbose {LevelFilter::DEBUG} else {LevelFilter::INFO});
-        win_service::start().unwrap();
+        let result = win_service::start();
+        if let Err(err) = result {
+            error!("Error: {}", err);
+            std::process::exit(0x1);
+        }
+        info!("Service stopped in main loop");
         return;
     }
     logging::init_logger(if options.verbose {LevelFilter::DEBUG} else {LevelFilter::INFO});
     debug!("Options parsed");
-    match listen(options) {
-        Ok(_) => std::process::exit(0x0),
-        Err(why) => {
-            match why {
-                PermissionDenied => eprintln!("error: Permission Denied. Have you run setcap?"),
-                Error::NotSupported(s) => eprintln!("[NotSupported] error: {}", s),
-                Error::DeviceNotFound => eprintln!("[DeviceNotFound] error: {}", why),
-                Error::Other(s) => eprintln!("[Other] error: {}", s),
-                Error::InvalidBDAddr(s) => eprintln!("[InvalidBDAddr] error: {}", s),
-                Error::NoSuchCharacteristic => eprintln!("[NoSuchCharacteristic] error: {}", why),
-                Error::NotConnected => eprintln!("[NotConnected] error: {}", why),
-                Error::RuntimeError(s) => eprintln!("[RuntimeError] error: {}", s),
-                Error::UnexpectedCallback => eprintln!("[UnexpectedCallback] error: {}", why),
-                Error::Uuid(s) => eprintln!("[Uuid] error: {}", s),
-                Error::TimedOut(duration) => eprintln!("[TimedOut] error: {}, duration {duration:?}", why),
-                _ => eprintln!("[Generic] error: {}", why),
-            }
-            std::process::exit(0x1);
+    match tokio::runtime::Runtime::new() {
+        Ok(rt) => {
+            rt.block_on(async {
+                match listen(options).await {
+                    Ok(_) => std::process::exit(0x0),
+                    Err(why) => {
+                        match why {
+                            PermissionDenied => eprintln!("error: Permission Denied. Have you run setcap?"),
+                            Error::NotSupported(s) => eprintln!("[NotSupported] error: {}", s),
+                            Error::DeviceNotFound => eprintln!("[DeviceNotFound] error: {}", why),
+                            Error::Other(s) => eprintln!("[Other] error: {}", s),
+                            Error::InvalidBDAddr(s) => eprintln!("[InvalidBDAddr] error: {}", s),
+                            Error::NoSuchCharacteristic => eprintln!("[NoSuchCharacteristic] error: {}", why),
+                            Error::NotConnected => eprintln!("[NotConnected] error: {}", why),
+                            Error::RuntimeError(s) => eprintln!("[RuntimeError] error: {}", s),
+                            Error::UnexpectedCallback => eprintln!("[UnexpectedCallback] error: {}", why),
+                            Error::Uuid(s) => eprintln!("[Uuid] error: {}", s),
+                            Error::TimedOut(duration) => eprintln!("[TimedOut] error: {}, duration {duration:?}", why),
+                            _ => eprintln!("[Generic] error: {}", why),
+                        }
+                        std::process::exit(0x1);
+                    }
+                };
+            });
         }
-    }
+        Err(e) => error!("Error creating runtime: {}", e)
+    };
 }
+

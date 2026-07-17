@@ -1,9 +1,8 @@
 ﻿use std::ffi::OsString;
-use std::result;
 use std::sync::mpsc;
 use std::time::Duration;
 use clap::Parser;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
     ServiceType,
@@ -12,7 +11,7 @@ use windows_service::service_control_handler::ServiceControlHandlerResult;
 use windows_service::{
     Error, define_windows_service, service_control_handler, service_dispatcher,
 };
-use crate::{logging, Options};
+use crate::{Options};
 
 const SERVICE_NAME: &str = "ping_service";
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
@@ -83,11 +82,12 @@ fn run_service() -> Result<(), Error> {
         }
     };
 
+    info!("Starting the listening task...");
     // Start the listen task in its own runtime.
     runtime.spawn(async move {
         // Need to implement cancellation to the listen task so it is properly cancelled when
         // the service is stopped.
-        let _ = crate::listen(options);
+        let _ = crate::listen(options).await;
     });
 
     loop {
@@ -102,6 +102,7 @@ fn run_service() -> Result<(), Error> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         };
     }
+    info!("Stopping the service...");
 
     status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
